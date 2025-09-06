@@ -1,0 +1,27 @@
+version: '3.9'
+services:
+  feed-web:
+    build: .
+    container_name: feed-web
+    ports:
+      - "3000:3000"
+    environment:
+      # For SQLite (default)
+      - DATABASE_URL=file:./prisma/dev.db
+      # Optional AI keys (uncomment and set values)
+      # - GOOGLE_API_KEY=your_gemini_key
+      # - OPENAI_API_KEY=your_openai_key
+      - NODE_ENV=production
+    volumes:
+      # Persist SQLite database between container recreations
+      - feed_data:/app/prisma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/ingredients"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  feed_data:
+    driver: local

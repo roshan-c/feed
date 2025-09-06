@@ -175,6 +175,74 @@ Potential future test layers:
 
 ---
 ## Deployment
+
+### Docker (Local or Server)
+A `Dockerfile` and `docker-compose.yml` are provided.
+
+#### Quick Run (SQLite persisted in named volume)
+```bash
+docker compose up --build -d
+# Visit http://localhost:3000
+```
+Data (SQLite file) is stored in the `feed_data` volume.
+
+#### Environment Variables
+Edit `docker-compose.yml` or pass with `--env` flags. Example overriding AI keys:
+```bash
+docker compose run -e OPENAI_API_KEY=sk-... -e GOOGLE_API_KEY=... feed-web
+```
+
+#### Logs / Health
+```bash
+docker compose logs -f feed-web
+```
+Healthcheck hits `/api/ingredients` every 30s.
+
+#### Rebuilding After Changes
+```bash
+docker compose build --no-cache feed-web && docker compose up -d
+```
+
+### Switching to Postgres (Optional)
+1. Add a Postgres service to `docker-compose.yml`:
+```yaml
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=feed
+      - POSTGRES_PASSWORD=feed
+      - POSTGRES_DB=feed
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+```
+2. Update `prisma/schema.prisma` datasource:
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+```
+3. Set `DATABASE_URL` in compose for `feed-web`:
+```
+DATABASE_URL=postgresql://feed:feed@db:5432/feed
+```
+4. Run migrations in the container:
+```bash
+docker compose exec feed-web bunx prisma migrate deploy
+```
+5. Remove the SQLite volume mount (`- feed_data:/app/prisma`) if no longer needed.
+
+### Production Notes
+- Multi-stage build produces a small Bun runtime image.
+- `prisma migrate deploy` runs on container start; ensure migrations are committed.
+- Use an external volume or managed Postgres for durability in production.
+- Set `NODE_ENV=production` (already in compose file).
+- Consider adding a reverse proxy (Caddy / Traefik / Nginx) for TLS.
+
+### Vercel
+
 Vercel ready. Minimal config required.
 
 Suggested build settings:
