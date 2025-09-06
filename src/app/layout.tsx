@@ -1,6 +1,14 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Viewport } from "next";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  userScalable: false,
+};
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,7 +33,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <link rel="manifest" href="/manifest.json" />
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+        <meta name="apple-mobile-web-app-capable" content="black-translucent" />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100`}
