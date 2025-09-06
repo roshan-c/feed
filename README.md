@@ -1,36 +1,202 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Feed
 
-## Getting Started
+Inventory + ingredient ingestion playground built with the Next.js App Router, Prisma (SQLite), and AI-assisted helpers (OCR + recipe ideation). Includes manual entry, barcode product lookup via OpenFoodFacts, receipt OCR (Gemini), and recipe idea generation (OpenAI). Designed to be simple to extend while exploring data ingestion patterns.
 
-First, run the development server:
+---
+## Features
+- Ingredient storage (SQLite via Prisma) with CRUD API
+- Manual add form with quantity/unit normalization
+- Barcode lookup (OpenFoodFacts) with smart name + quantity/unit guessing
+- Receipt OCR endpoint (Gemini) with resilient JSON parsing + fallback data when API/key unavailable
+- Recipe idea generation using OpenAI (with strict JSON shaping + fallback)
+- Lightweight client state synced to server
+- Stronger runtime validation / defensive parsing (no `any`)
 
+---
+## Tech Stack
+- **Framework:** Next.js (App Router, Route Handlers)
+- **Runtime:** Node.js (default) — not using edge yet because of AI SDK + Prisma
+- **DB:** SQLite (development) via Prisma Client (easily swappable to Postgres)
+- **AI:** Google Generative AI (Gemini 1.5 Flash) for OCR parsing, OpenAI (gpt-4o-mini) for recipes
+- **HTTP Client:** Native fetch (indirect via AI libs) + axios (OpenFoodFacts lookup — may be replaced with fetch)
+- **Package Manager:** Bun / npm / pnpm / yarn (choose one)
+
+---
+## Quick Start
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Install deps
+bun install   # or npm install
+
+# Set environment variables (copy .env.example if you create one)
+export DATABASE_URL="file:./prisma/dev.db"   # default
+# Optional:
+# export GOOGLE_API_KEY=your_gemini_key
+# export OPENAI_API_KEY=your_openai_key
+
+# Run database migrations
+npx prisma migrate dev --name init
+
+# Start dev server
+bun dev  # -> http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 to use the UI.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Prisma Studio (optional)
+```bash
+npx prisma studio
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
+## Environment Variables
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | Yes | SQLite / database connection string |
+| `GOOGLE_API_KEY` | No | Enables live Gemini OCR parsing (otherwise fallback list) |
+| `OPENAI_API_KEY` | No | Enables recipe generation (otherwise fallback recipe) |
 
-## Learn More
+If AI keys are absent, endpoints degrade gracefully with deterministic fallback responses so the UI still works.
 
-To learn more about Next.js, take a look at the following resources:
+---
+## Data Model
+`prisma/schema.prisma`:
+```prisma
+model Ingredient {
+  id        String   @id @default(cuid())
+  name      String
+  quantity  Float    @default(0)
+  unit      String   @default("pcs")
+  addedAt   DateTime @default(now())
+}
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
+## API Endpoints
+All responses are JSON. Non-2xx returns an `{ error: string }` payload unless otherwise documented.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Ingredients
+- `GET /api/ingredients` → `Ingredient[]`
+- `POST /api/ingredients` body: `{ name: string, quantity?: number, unit?: string }` → created Ingredient
+- `PUT /api/ingredients` body: `{ id: string, name?, quantity?, unit? }` → updated Ingredient
+- `DELETE /api/ingredients?id=...` → `{ ok: true }`
 
-## Deploy on Vercel
+### Barcode Lookup
+- `GET /api/barcode?code=EAN_OR_UPC`
+Returns:
+```json
+{ "found": true, "name": "Product Name", "quantityGuess": 500, "unitGuess": "g" }
+```
+404 example if unknown: `{ "found": false }`
+Errors: `{ "error": "Lookup failed" }`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+_Current implementation fetches directly from OpenFoodFacts each request. See Caching Roadmap below for upcoming enhancements._
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### OCR (Receipt Image → Ingredients)
+- `POST /api/ocr`
+  - Accepts `multipart/form-data` with `image` field OR JSON `{ imageBase64 }` (legacy/testing)
+  - Success: `{ ingredients: [{ name, quantity, unit }, ...] }`
+  - If Gemini key missing or parse failure: `{ note?|error?, ingredients: fallback[] }` still 200 to keep UX smooth.
+
+### Recipe Ideas
+- `POST /api/recipes` body: `{ ingredients: string[] }`
+  - Success: `{ ideas: [{ id, title, ingredients: string[], steps: string[] }, ...] }`
+  - Fallback: `{ ideas: [ ...1 item... ], note: "fallback used", error?: string }`
+
+---
+## Barcode Caching Roadmap
+A multi-layer caching strategy is planned (not yet implemented in code):
+
+**Planned Architecture**
+1. Level 0: In-memory LRU (fast hot path) with TTL + stale-while-revalidate window.
+2. Level 1: Persistent Prisma table `ProductCache` (survives restarts) storing raw OpenFoodFacts JSON, ETag, Last-Modified.
+3. Upstream conditional requests using `If-None-Match` / `If-Modified-Since` to reduce bandwidth and respect freshness.
+4. Negative caching (e.g., product not found) with shorter TTL.
+5. Concurrency control (in-flight promise map) to prevent stampede.
+6. Optional: Redis / external cache drop-in via abstracted interface if scaling horizontally.
+
+**Draft Prisma Model** (future):
+```prisma
+model ProductCache {
+  code          String   @id
+  json          String
+  etag          String?
+  lastModified  String?
+  fetchedAt     DateTime
+  ttlSeconds    Int
+  transformVersion Int
+  failCount     Int      @default(0)
+  lastAttemptAt DateTime @updatedAt
+  name          String?
+  brand         String?
+  quantity      String?
+  @@index(fetchedAt)
+}
+```
+
+**Freshness Strategy**
+- Base TTL: 24h
+- Stale-While-Revalidate window: additional 24h (serve stale + async refresh)
+- Hard expiry: 7d
+- Force bypass: `GET /api/barcode?code=...&force=1`
+- Response metadata (dev/debug): `cachedSource` (memory|db|network200|network304), `stale: boolean`
+
+**Why This Matters**
+- Reduces repeated remote calls
+- Survives server restarts / deployments
+- Allows polite use of OpenFoodFacts API
+- Supports graceful degradation if upstream is down (serve stale)
+
+---
+## Local Development Notes
+- Hot reload handles API route changes automatically
+- Prisma Client is generated on demand; if types seem stale run:
+  ```bash
+  npx prisma generate
+  ```
+- For barcode testing use common codes (e.g., 737628064502 or 3017620422003)
+- Without AI keys the UI still works (manual + barcode + fallback OCR + fallback recipe)
+
+---
+## Testing Ideas (Not Implemented Yet)
+Potential future test layers:
+- Unit test parsing helpers (quantity/unit guessing, OCR normalization)
+- Contract tests for API route payload shapes
+- Integration test with an in-memory SQLite DB
+
+---
+## Roadmap
+- [ ] Implement Phase 1 caching (in-memory LRU + TTL)
+- [ ] Add ProductCache table + persistence (Phase 2)
+- [ ] Conditional requests & stale-while-revalidate (Phase 3)
+- [ ] Metrics & debug flags (Phase 4)
+- [ ] Negative + forced invalidation endpoints
+- [ ] Optional Redis adapter for horizontal scale
+- [ ] Add tests around parsing & caching logic
+
+---
+## Deployment
+Vercel ready. Minimal config required.
+
+Suggested build settings:
+- Install Command: (auto)  
+- Build Command: `next build`  
+- Output: `.next`
+
+Environment variables must be configured in the hosting platform dashboard.
+
+---
+## Contributing
+Open a PR with focused changes. Keep endpoints small, validate inputs, prefer pure helpers for transformations, and document new env vars / schema changes in this README.
+
+---
+## License
+Not specified. Add a license file before public release if needed.
+
+---
+## Appendix: Error Handling Principles
+- Prefer returning usable fallback data (OCR & recipes) over hard failures to keep the flow unblocked.
+- For create/update endpoints, fail fast with 4xx on validation; return 5xx only for unexpected server errors.
+- Keep error messages generic externally to avoid leaking internals.
+
+---
+Feel free to extend or request additional documentation sections (e.g., metrics, auth, testing).

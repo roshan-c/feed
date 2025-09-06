@@ -1,0 +1,19 @@
+// Prisma schema for local SQLite storage
+// Future: switch provider to postgresql via env var
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Ingredient {
+  id        String   @id @default(cuid())
+  name      String
+  quantity  Float    @default(0)
+  unit      String   @default("pcs")
+  addedAt   DateTime @default(now())
+}
